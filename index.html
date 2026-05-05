@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Detector de Gases</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f1117;
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 1.4rem;
+      margin-bottom: 6px;
+      color: #00d4aa;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    #estado-mqtt {
+      text-align: center;
+      font-size: 0.8rem;
+      margin-bottom: 20px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      display: inline-block;
+      width: 100%;
+    }
+    .conectado    { color: #00d4aa; }
+    .desconectado { color: #ff4d4d; }
+    .conectando   { color: #ffa500; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+
+    .tarjeta {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+      transition: border-color 0.3s;
+    }
+    .tarjeta:hover { border-color: #00d4aa44; }
+
+    .tarjeta .nombre {
+      font-size: 0.75rem;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+
+    .tarjeta .valor {
+      font-size: 2rem;
+      font-weight: bold;
+      color: #00d4aa;
+      line-height: 1;
+    }
+
+    .tarjeta .unidad {
+      font-size: 0.75rem;
+      color: #666;
+      margin-top: 4px;
+    }
+
+    .tarjeta .alerta-normal   { color: #00d4aa; }
+    .tarjeta .alerta-precaucion { color: #ffa500; }
+    .tarjeta .alerta-peligro  { color: #ff4d4d; }
+
+    .seccion-grafica {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+
+    .seccion-grafica h2 {
+      font-size: 0.85rem;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 12px;
+    }
+
+    canvas { width: 100% !important; }
+
+    #ultimo-update {
+      text-align: center;
+      font-size: 0.75rem;
+      color: #444;
+      margin-top: 10px;
+    }
+
+    .fan-badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: bold;
+    }
+    .fan-on  { background: #00d4aa22; color: #00d4aa; border: 1px solid #00d4aa55; }
+    .fan-off { background: #ff4d4d22; color: #ff4d4d; border: 1px solid #ff4d4d55; }
+  </style>
+</head>
+<body>
+
+<h1>🔬 Detector de Gases</h1>
+<div id="estado-mqtt" class="desconectado">⚪ Desconectado</div>
+
+<!-- Tarjetas de valores -->
+<div class="grid">
+  <div class="tarjeta">
+    <div class="nombre">Temperatura</div>
+    <div class="valor alerta-normal" id="val-temp">--</div>
+    <div class="unidad">°C</div>
+  </div>
+  <div class="tarjeta">
+    <div class="nombre">Humedad</div>
+    <div class="valor alerta-normal" id="val-hum">--</div>
+    <div class="unidad">%</div>
+  </div>
+  <div class="tarjeta">
+    <div class="nombre">MQ-3 Alcohol</div>
+    <div class="valor" id="val-mq3">--</div>
+    <div class="unidad">mg/L</div>
+  </div>
+  <div class="tarjeta">
+    <div class="nombre">MQ-4 CH4</div>
+    <div class="valor" id="val-mq4">--</div>
+    <div class="unidad">ppm</div>
+  </div>
+  <div class="tarjeta">
+    <div class="nombre">MQ-7 CO</div>
+    <div class="valor" id="val-mq7">--</div>
+    <div class="unidad">ppm</div>
+  </div>
+  <div class="tarjeta">
+    <div class="nombre">MQ-8 H₂</div>
+    <div class="valor" id="val-mq8">--</div>
+    <div class="unidad">ppm</div>
+  </div>
+  <div class="tarjeta">
+    <div class="nombre">CCS811 CO₂</div>
+    <div class="valor" id="val-eco2">--</div>
+    <div class="unidad">ppm</div>
+  </div>
+  <div class="tarjeta">
+    <div class="nombre">CCS811 TVOC</div>
+    <div class="valor" id="val-tvoc">--</div>
+    <div class="unidad">ppb</div>
+  </div>
+</div>
+
+<!-- Gráficas -->
+<div class="seccion-grafica">
+  <h2>Historial — Gases MQ (últimas lecturas)</h2>
+  <canvas id="graficaMQ" height="120"></canvas>
+</div>
+<div class="seccion-grafica">
+  <h2>Historial — CCS811 CO₂</h2>
+  <canvas id="graficaCCS" height="80"></canvas>
+</div>
+<div class="seccion-grafica">
+  <h2>Historial — Temperatura y Humedad</h2>
+  <canvas id="graficaDHT" height="80"></canvas>
+</div>
+
+<div id="ultimo-update">Sin datos aún</div>
+
+<script>
+  const MQTT_HOST = "fbdbed1a18914eb197a6b5e6b4a25d39.s1.eu.hivemq.cloud"; // Tu host
+  const MQTT_USER = "RixCerv";
+  const MQTT_PASS = "i4zUu8rRUcNXMpU";
+  const DEVICE_ID = "esp32_01"; // O "#" para todos los dispositivos
+  // ──────────────────────────────────────────────
+
+  const MAX_PUNTOS = 50;
+  const labels = [];
+  const dataMQ3  = [], dataMQ4 = [], dataMQ7 = [], dataMQ8 = [];
+  const dataCO2  = [];
+  const dataTemp = [], dataHum = [];
+
+  // ─── GRÁFICA MQ ───────────────────────────────
+  const ctxMQ = document.getElementById('graficaMQ').getContext('2d');
+  const graficaMQ = new Chart(ctxMQ, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'MQ-3 (mg/L)', data: dataMQ3, borderColor: '#00d4aa', tension: 0.3, pointRadius: 0, borderWidth: 1.5 },
+        { label: 'MQ-4 (ppm)',  data: dataMQ4, borderColor: '#ffa500', tension: 0.3, pointRadius: 0, borderWidth: 1.5 },
+        { label: 'MQ-7 (ppm)',  data: dataMQ7, borderColor: '#ff4d4d', tension: 0.3, pointRadius: 0, borderWidth: 1.5 },
+        { label: 'MQ-8 (ppm)',  data: dataMQ8, borderColor: '#a78bfa', tension: 0.3, pointRadius: 0, borderWidth: 1.5 },
+      ]
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: { legend: { labels: { color: '#888', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#555', maxTicksLimit: 6 }, grid: { color: '#1f2233' } },
+        y: { ticks: { color: '#555' }, grid: { color: '#1f2233' } }
+      }
+    }
+  });
+
+  // ─── GRÁFICA CCS811 ───────────────────────────
+  const ctxCCS = document.getElementById('graficaCCS').getContext('2d');
+  const graficaCCS = new Chart(ctxCCS, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'CO₂ (ppm)', data: dataCO2, borderColor: '#38bdf8', tension: 0.3, pointRadius: 0, borderWidth: 1.5, fill: true, backgroundColor: '#38bdf808' },
+      ]
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: { legend: { labels: { color: '#888', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#555', maxTicksLimit: 6 }, grid: { color: '#1f2233' } },
+        y: { ticks: { color: '#555' }, grid: { color: '#1f2233' } }
+      }
+    }
+  });
+
+  // ─── GRÁFICA DHT11 ────────────────────────────
+  const ctxDHT = document.getElementById('graficaDHT').getContext('2d');
+  const graficaDHT = new Chart(ctxDHT, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Temp (°C)', data: dataTemp, borderColor: '#f97316', tension: 0.3, pointRadius: 0, borderWidth: 1.5 },
+        { label: 'Hum (%)',   data: dataHum,  borderColor: '#60a5fa', tension: 0.3, pointRadius: 0, borderWidth: 1.5 },
+      ]
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: { legend: { labels: { color: '#888', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#555', maxTicksLimit: 6 }, grid: { color: '#1f2233' } },
+        y: { ticks: { color: '#555' }, grid: { color: '#1f2233' } }
+      }
+    }
+  });
+
+  // ─── COLORES DE ALERTA ────────────────────────
+  function colorAlerta(valor, limPrecaucion, limPeligro) {
+    if (valor >= limPeligro)    return 'alerta-peligro';
+    if (valor >= limPrecaucion) return 'alerta-precaucion';
+    return 'alerta-normal';
+  }
+
+  function actualizarTarjeta(id, valor, decimales, limP, limD) {
+    const el = document.getElementById(id);
+    el.textContent = decimales > 0 ? valor.toFixed(decimales) : Math.round(valor);
+    el.className = 'valor ' + colorAlerta(valor, limP, limD);
+  }
+
+  // ─── AGREGAR PUNTO A GRÁFICA ──────────────────
+  function agregarPunto(hora, d) {
+    labels.push(hora);
+    dataMQ3.push(d.mq3);
+    dataMQ4.push(d.mq4);
+    dataMQ7.push(d.mq7);
+    dataMQ8.push(d.mq8);
+    dataCO2.push(d.eco2);
+    dataTemp.push(d.temp);
+    dataHum.push(d.hum);
+
+    // Mantener solo los últimos MAX_PUNTOS
+    if (labels.length > MAX_PUNTOS) {
+      labels.shift();
+      dataMQ3.shift(); dataMQ4.shift();
+      dataMQ7.shift(); dataMQ8.shift();
+      dataCO2.shift();
+      dataTemp.shift(); dataHum.shift();
+    }
+
+    graficaMQ.update();
+    graficaCCS.update();
+    graficaDHT.update();
+  }
+
+  // ─── CONEXIÓN MQTT ────────────────────────────
+  const estadoEl = document.getElementById('estado-mqtt');
+
+  const client = mqtt.connect(`wss://${MQTT_HOST}:8884/mqtt`, {
+    username: MQTT_USER,
+    password: MQTT_PASS,
+    clientId: 'dashboard_' + Math.random().toString(16).slice(2, 8),
+    clean: true,
+  });
+
+  client.on('connect', () => {
+    estadoEl.textContent = '🟢 Conectado a HiveMQ';
+    estadoEl.className = 'conectado';
+    client.subscribe(`sensores/${DEVICE_ID}`);
+  });
+
+  client.on('error', (err) => {
+    estadoEl.textContent = '🔴 Error de conexión';
+    estadoEl.className = 'desconectado';
+    console.error(err);
+  });
+
+  client.on('reconnect', () => {
+    estadoEl.textContent = '🟡 Reconectando...';
+    estadoEl.className = 'conectando';
+  });
+
+  client.on('message', (topic, payload) => {
+    try {
+      const d = JSON.parse(payload.toString());
+      const hora = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+      // Actualizar tarjetas
+      actualizarTarjeta('val-temp', d.temp, 0, 35,  45);
+      actualizarTarjeta('val-hum',  d.hum,  0, 80,  95);
+      actualizarTarjeta('val-mq3',  d.mq3,  2, 0.5,  2);
+      actualizarTarjeta('val-mq4',  d.mq4,  0, 1000, 5000);
+      actualizarTarjeta('val-mq7',  d.mq7,  0, 50,   200);
+      actualizarTarjeta('val-mq8',  d.mq8,  0, 500,  2000);
+      actualizarTarjeta('val-eco2', d.eco2, 0, 1000, 2000);
+      actualizarTarjeta('val-tvoc', d.tvoc, 0, 220,  660);
+
+      // Actualizar gráficas
+      agregarPunto(hora, d);
+
+      // Timestamp
+      document.getElementById('ultimo-update').textContent =
+        `Última actualización: ${hora} — Dispositivo: ${d.id}`;
+
+    } catch (e) {
+      console.error('Error al parsear mensaje:', e);
+    }
+  });
+</script>
+</body>
+</html>
